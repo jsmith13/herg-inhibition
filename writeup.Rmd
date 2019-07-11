@@ -184,17 +184,46 @@ ROC.plot
 
 $logit(Pr_{active}) = \sum{X_i\beta_i}$
 
-Predictor ($X_i$) | Coefficient ($\beta_i$)
------------ | ---------
-(intercept) | -4.49
-Aromatic Atoms | 0.107
-VABC Volume | 0.0156
-VABC Volume$^2$ | -1.09e-5
-Amine | 0.362
-TPSA | -0.0180
-TPSA$^2$ | 1.60e-5
-XLogP | 0.0781
-XLogP$^3$ | -1.11e-3
+Predictor ($X_i$) | Coefficient ($\beta_i$)  |  95% Confidence Interval
+----------- | --------- | ---------
+(intercept) | -4.49 | [-4.85, -4.13]
+Aromatic Atoms | 0.107 | [0.0921, 0.121]
+VABC Volume | 0.0156 | [0.0135, 0.0177]
+VABC Volume$^2$ | -1.09e-5 | [-1.31e-5, -0.860e-5]
+Amine | 0.362 | [0.0856, 0.638]
+TPSA | -0.0180 | [-0.0212, -0.0147]
+TPSA$^2$ | 1.60e-5 | [-2.13e-5, -1.07e-5]
+XLogP | 0.0781 | [8.80e-3, 0.147]
+XLogP$^3$ | -1.11e-3 | [-1.58e-3, -0.649e-3]
+
+
+```{r}
+## generate plots for the contribution of each component to logit(Pr)
+# define ranges for molecular descriptors
+x.AA <- seq(0, max(hERG$Aromatic.Atoms.Count), 1)
+x.VABC <- seq(0, max(hERG$VABC.Volume.Descriptor), 1)
+x.TPSA <- seq(0, max(hERG$Topological.Polar.Surface.Area), 1)
+x.XLogP <- seq(min(hERG$XLogP), max(hERG$XLogP), 0.1)
+
+# calculate y values across the defined ranges
+y.AA <- 0.107 * x.AA
+y.VABC <- 0.0156 * x.VABC + -1.09e-5 * x.VABC^2
+y.TPSA <- -0.018 * x.TPSA + 1.6e-5 * x.TPSA^2
+y.XLogP <- 0.0781 * x.XLogP + -1.11e-3 * x.XLogP^3
+
+# generate plots for each of the x/y pairs
+plot.AA <- ggplot() + geom_line(aes(x.AA, y.AA), size = 1.5) + ggtitle("Aromatic Atoms") + xlab("atoms") + ylab("log-odds")
+plot.VABC <- ggplot() + geom_line(aes(x.VABC, y.VABC), size = 1.5) + ggtitle("VABC Volume") + xlab("cubic angstroms") + ylab("log-odds")
+plot.TPSA <- ggplot() + geom_line(aes(x.TPSA, y.TPSA), size = 1.5) + ggtitle("TPSA") + xlab("angstroms") + ylab("log-odds")
+plot.XLogP <- ggplot() + geom_line(aes(x.XLogP, y.XLogP), size = 1.5) + ggtitle("XLogP") + xlab("XLogP") + ylab("log-odds")
+
+# arrange the plots into a grid
+grid <- cowplot::plot_grid(plot.AA, plot.VABC, plot.TPSA, plot.XLogP)
+
+# add a shared title
+title <- cowplot::ggdraw() + cowplot::draw_label("Contribution of Continuous Predictors", fontface = "bold")
+cowplot::plot_grid(title, grid, ncol = 1, rel_heights = c(0.1, 1))
+```
 
 ### Model Validation
 
@@ -221,7 +250,7 @@ ROC.plot
 ## Conclusion
 We have used a logistic regression approach to produce a model for classifying the hERG inhibition of compounds as either active or inactive. Testing the model against an independent validation gave predictions with moderate accuracy. While the overall performance of the model as measured by ROC AUC was only slightly improved from the baseline model fit with all available molecular descriptors, the relative simplicity of the optimized model makes it more suitable as a guide for the design of molecules.
 
-The optimized model revealed that the planarity induced by aromatic rings and the presence of a primary or secondary amine were direct drivers of hERG inhibition for molecules in the NCATS CGC dataset, in line with classical medicinal chemical heuristics. Additionally, VABC volume, TPSA, and XLogP proved to have a maxima at which the risk of hERG inhibition is highest, with the odds of inhibition falling off to either side. This behavior is in consistent with a binding interaction casuing blockage of the hERG channel.
+The optimized model revealed that the planarity induced by aromatic rings and the presence of a primary or secondary amine were direct drivers of hERG inhibition for molecules in the NCATS CGC dataset, in line with classical medicinal chemical heuristics. Additionally, VABC volume, TPSA, and XLogP proved to have a maxima at which the risk of hERG inhibition is highest, with the odds of inhibition falling off to either side. This behavior is in consistent with a binding interaction causing blockage of the hERG channel.
 
 ## Further Directions
 There are two immediate options to be explored with additional time:
