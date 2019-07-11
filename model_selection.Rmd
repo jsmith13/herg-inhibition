@@ -1,0 +1,210 @@
+---
+title: "hERG"
+author: "Jake Smith"
+date: "2/4/2019"
+output: html_document
+  latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(18438)
+
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+```
+
+The hERG activity data was collected from the PubChem database, PubChem AID 588834, "QHTS Assay For Small Molecule Inhibitors Of The Human HERG Channel Activity". Molecular descriptors were calculated using KNIME-CDK version 1.5.600.v201711101057.
+
+```{r}
+# import the hERG dataset
+hERG <- read.csv("hERG_descriptors.csv")
+
+# remove Score and activators
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -row.ID)
+
+# convert potency to pIC50, replace NA with 0
+hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
+hERG <- mutate(hERG, Potency = case_when(is.na(Potency) ~ 0, !is.na(Potency) ~ Potency))
+
+# re-encode phenotype as success/fail
+hERG <- mutate(hERG, Phenotype = case_when(Phenotype == "Inactive" ~ 0, Phenotype == "Inhibitor" ~ 1))
+```
+
+```{r}
+## plot observed hERG activity as a function of the chemical space
+
+# generate principle components from the major numeric descriptors
+# log transform predictors where necessary to get closer to normal
+hERG.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG, center = TRUE, scale. = TRUE)
+
+# plot the chemical space using the principle components, color by activity score
+chemspace <- ggplot(data = hERG) + geom_point(aes(x = hERG.PCA$x[,1], y = hERG.PCA$x[,2], color = Phenotype))
+
+# show plot
+chemspace
+```
+
+```{r}
+# plot histograms for each of the explanatory variables in the hERG dataset
+ggplot(data = (select(hERG, -Potency) %>% gather(key, value))) + facet_wrap(~ key, scale = "free") + geom_histogram(aes(value), bins = 50)
+```
+```{r}
+# fit a logistic regression for phenotype as a function of all other variables
+glm.v1 <- glm(Phenotype ~ ., data = select(hERG, -Potency), family = binomial)
+
+# output a summary
+summary(glm.v1)
+```
+
+```{r}
+# calculate VIF for the explanatory variables
+car::vif(glm.v1)
+```
+
+Initially remove hydrogen bond donors, rotatable bond count, and formal charge -> low significance descriptors with minimal covariance to confuse the evaluation
+
+Remove molecular weight -> VABC volume is a more detailed measure of the same general property.
+
+XLogP gets to remain in the model, as it is a commonly used heuristic in medicinal chemistry whose exclusion would be notable.
+
+```{r}
+# remove variables and refit
+glm.v2 <- glm(Phenotype ~ Aromatic.Atoms.Count + Bond.Polarizabilities + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + SP3.Character + Eccentric.Connectivity.Index + Amine, data = select(hERG, -Potency), family = binomial)
+
+# output a summary
+summary(glm.v2)
+```
+
+```{r}
+# calculate VIF for the explanatory variables
+car::vif(glm.v2)
+```
+
+Remove bond polarizabilities and hydrogen bond acceptors -> high VIF, conceptually related to several other remaining descriptors
+
+```{r}
+# remove variables and refit
+glm.v3 <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Topological.Polar.Surface.Area + XLogP + SP3.Character + Eccentric.Connectivity.Index + Amine, data = select(hERG, -Potency), family = binomial)
+
+# output a summary
+summary(glm.v3)
+```
+
+```{r}
+# calculate VIF for the explanatory variables
+car::vif(glm.v3)
+```
+
+Finally, we will try to remove eccentric connectivity index. While it does appear to be contributing significantly, it is quite damaging to the interpretability of the model.
+
+Similarly, while both are contributing significantly, aromatic atoms count and sp3 character are closely related molecular properties. In the interest of improving interpretability, we will remove sp3 character, the less accessible of the two.
+
+```{r}
+# remove variables and refit
+glm.v4 <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Topological.Polar.Surface.Area + XLogP + Amine, data = select(hERG, -Potency), family = binomial)
+
+# output a summary
+summary(glm.v4)
+```
+
+```{r}
+# calculate BIC for the fitted models
+BIC(glm.v1, glm.v2, glm.v3, glm.v4)
+```
+
+```{r}
+## cross-validation for the intermediate models
+
+# ten-fold partition the hERG dataset
+logit.folds <- caret::createFolds(hERG$Phenotype, k = 10)
+
+# add new columns to hERG to hold predictions
+hERG$Prediction1 <- NA
+hERG$Prediction2 <- NA
+hERG$Prediction3 <- NA
+hERG$Prediction4 <- NA
+
+# define a restricted dataset to run regressions on
+hERG.restict <- select(hERG, -Potency, -Prediction1, -Prediction2, -Prediction3, -Prediction4)
+
+# perform ten-fold cross-validation on the three logistic regressions
+for (i in 1:10) {
+  # fit the models on the 9/10 sets
+  glm1 <- glm(Phenotype ~ ., data = hERG.restict[-logit.folds[[i]], ], family = binomial)
+  
+  glm2 <- glm(Phenotype ~ Aromatic.Atoms.Count + Bond.Polarizabilities + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + SP3.Character + Eccentric.Connectivity.Index + Amine, data = hERG.restict[-logit.folds[[i]], ], family = binomial)
+
+  glm3 <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Topological.Polar.Surface.Area + XLogP + SP3.Character + Eccentric.Connectivity.Index + Amine, data = hERG.restict[-logit.folds[[i]], ], family = binomial)
+  
+  glm4 <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Topological.Polar.Surface.Area + XLogP + SP3.Character + Amine, data = hERG.restict[-logit.folds[[i]], ], family = binomial)
+
+  # predict with the 1/10 sets
+  glm1.pred <- predict(glm1, select(hERG, -Potency)[logit.folds[[i]], ])
+  glm2.pred <- predict(glm2, select(hERG, -Potency)[logit.folds[[i]], ])
+  glm3.pred <- predict(glm3, select(hERG, -Potency)[logit.folds[[i]], ])
+  glm4.pred <- predict(glm4, select(hERG, -Potency)[logit.folds[[i]], ])
+
+  # store predicted values back in hERG
+  hERG[logit.folds[[i]], ] <- cbind(hERG[logit.folds[[i]], 1:15], glm1.pred, glm2.pred, glm3.pred, glm4.pred)
+}
+
+# calculate AUC
+pROC::auc(response = hERG$Phenotype, predictor = hERG$Prediction1, threshold = 0.5)
+pROC::auc(response = hERG$Phenotype, predictor = hERG$Prediction2, threshold = 0.5)
+pROC::auc(response = hERG$Phenotype, predictor = hERG$Prediction3, threshold = 0.5)
+pROC::auc(response = hERG$Phenotype, predictor = hERG$Prediction4, threshold = 0.5)
+```
+
+Trimming down the explanatory variables included in the model has cost us in terms of BIC, but cross-validation shows minimal loss in predictive ability.
+
+```{r}
+## plot terms versus logit(Phenotype)
+# pull out the terms included in the glm.v4
+glm.v4.terms <- names(glm.v4$coefficients)[2:length(glm.v4$coefficients)]
+
+# plot each explanatory variable versus logit(Pr)
+ggplot(data = hERG %>% select(Prediction4, glm.v4.terms) %>% gather("key", "value", -Prediction4), 
+       aes(x = value, y = Prediction4)) + geom_point() + geom_smooth(method = "loess", se = FALSE) + 
+  facet_wrap(~key, scales = "free")
+```
+
+Aromatic atoms count looks like a fairly linear relationship. TPSA and VABC each look significantly curved, and XLogP looks cubic. We will try introducing higher order terms for those variables.
+
+```{r}
+## cross-validation for models with higher order terms
+
+# ten-fold partition the hERG dataset
+logit.folds <- caret::createFolds(hERG$Phenotype, k = 10)
+
+# add new columns to hERG to hold predictions
+hERG$Prediction5 <- NA
+
+# define a restricted dataset to run regressions on
+hERG.restict <- select(hERG, -Potency, -Prediction1, -Prediction2, -Prediction3, -Prediction4, -Prediction5)
+
+# perform ten-fold cross-validation on the three logistic regressions
+for (i in 1:10) {
+  # fit the models on the 9/10 sets
+  glm5 <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + I(VABC.Volume.Descriptor^2) + Topological.Polar.Surface.Area + I(Topological.Polar.Surface.Area^2) + XLogP + I(XLogP^3) + Amine, data = hERG.restict[-logit.folds[[i]], ], family = binomial)
+
+  # predict with the 1/10 sets
+  glm5.pred <- predict(glm5, select(hERG, -Potency)[logit.folds[[i]], ])
+
+  # store predicted values back in hERG
+  hERG[logit.folds[[i]], ] <- cbind(hERG[logit.folds[[i]], 1:19], glm5.pred)
+}
+
+# calculate AUC
+pROC::auc(response = hERG$Phenotype, predictor = hERG$Prediction5, threshold = 0.5)
+```
+
+```{r}
+# fit the model with higher order terms added
+glm.v5 <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + I(VABC.Volume.Descriptor^2) + Topological.Polar.Surface.Area + I(Topological.Polar.Surface.Area^2) + XLogP + I(XLogP^3) + Amine, data = select(hERG, -Potency), family = binomial)
+
+# output a summary
+summary(glm.v5)
+```
+
