@@ -1,0 +1,86 @@
+---
+title: "hERG Validation"
+author: "Jake Smith"
+date: "3/5/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+set.seed(18438)
+
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(robustbase)
+require(pROC)
+```
+```{r, include = FALSE}
+# import the hERG dataset
+hERG <- read.csv("hERG_descriptors.csv")
+
+# remove Score and activators
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -row.ID)
+
+# convert potency to pIC50, replace NA with 0
+hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
+hERG <- mutate(hERG, Potency = case_when(is.na(Potency) ~ 0, !is.na(Potency) ~ Potency))
+
+# re-encode phenotype as success/fail
+hERG <- mutate(hERG, Phenotype = case_when(Phenotype == "Inactive" ~ 0, Phenotype == "Inhibitor" ~ 1))
+```
+
+```{r}
+# fit a robust logistic regression for Phenotype
+hERG.robust <- glmrob(Phenotype ~ Aromatic.Atoms.Count * SP3.Character + VABC.Volume.Descriptor * Molecular.Weight + Hydrogen.Bond.Acceptors * Amine + Topological.Polar.Surface.Area * XLogP + Eccentric.Connectivity.Index + Bond.Polarizabilities, data = hERG, family = binomial, method = "Mqle")
+```
+
+```{r}
+# import the hERG validation dataset
+hERG.validation <- read.csv("hERG_validation_descriptors.csv")
+
+# remove activators and extraneous columns
+hERG.validation <- filter(hERG.validation, Percent > -20) %>% select(-Score, -row.ID)
+
+# encode percentage inhibition as success/fail, name Phenotype for consistency with modeling dataset
+hERG.validation <- mutate(hERG.validation, Phenotype = case_when(Percent < 50 ~ 0, Percent >= 50 ~ 1))
+```
+
+```{r}
+# predict inhibition for the validation set
+hERG.validation$Predicted <- predict(hERG.robust, hERG.validation)
+
+# plot a ROC curve
+# calculate the ROC object
+validation.ROC <- roc(response = hERG.validation$Phenotype, pred = hERG.validation$Predicted, threshold = 50)
+
+# generate a plot
+ROC.plot <- ggroc(validation.ROC) + ggtitle("Validation Set ROC Curve")
+
+# add a label with the AUC
+ROC.plot <- ROC.plot + geom_label(aes(x = 0.9, y = 1, label = paste("AUC:", round(validation.ROC$auc, digits = 2))))
+
+# display the plot
+ROC.plot
+```
+```{r, message = FALSE}
+# combine the modeling and validation datasets for plotting
+hERG.both <- full_join(mutate(hERG, Set = "Modeling"), mutate(hERG.validation, Set = "Validation"))
+
+# generate principle components from the major numeric descriptors
+# log transform predictors where necessary to get closer to normal
+hERG.both.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG.both, center = TRUE, scale. = TRUE)
+
+# plot the chemical space using the principle components, color by modeling/validation set
+chemspace.both <- ggplot(data = hERG.both) + geom_point(aes(x = hERG.both.PCA$x[,1], y = hERG.both.PCA$x[,2], color = Set))
+
+# change titles, axis labels, tick marks
+chemspace.both <- chemspace.both + ggtitle("Composition of Modeling vs. Validation Set") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank())
+
+# changes to the coloring and associated legend
+chemspace.both <- chemspace.both + guides(colour = guide_legend(title = "", reverse = TRUE)) + scale_color_manual(values = c("orange3", "turquoise4"), labels = c("Modeling", "Validation"))
+
+# show plot
+chemspace.both
+```
+
