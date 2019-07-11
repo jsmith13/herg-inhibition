@@ -1,0 +1,236 @@
+---
+title: "A Logistic Regression Model for hERG Inhibition"
+author: "Jake Smith"
+output: pdf_document
+latex_engine: xelatex
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+set.seed(18438)
+
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(robustbase)
+require(pROC)
+```
+```{r, include = FALSE}
+# import the hERG modeling dataset
+hERG <- read.csv("hERG_descriptors.csv")
+
+# remove Score and activators
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -row.ID)
+
+# convert potency to pIC50, replace NA with 0
+hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
+hERG <- mutate(hERG, Potency = case_when(is.na(Potency) ~ 0, !is.na(Potency) ~ Potency))
+
+# re-encode phenotype as success/fail
+hERG <- mutate(hERG, Phenotype = case_when(Phenotype == "Inactive" ~ 0, Phenotype == "Inhibitor" ~ 1))
+```
+```{r}
+# import the hERG validation dataset
+hERG.validation <- read.csv("hERG_validation_descriptors.csv")
+
+# remove activators and extraneous columns
+hERG.validation <- filter(hERG.validation, Percent > -20) %>% select(-Score, -row.ID)
+
+# encode percentage inhibition as success/fail, name Phenotype for consistency with modeling dataset
+hERG.validation <- mutate(hERG.validation, Phenotype = case_when(Percent < 50 ~ 0, Percent >= 50 ~ 1))
+```
+
+## Introduction
+Inhibition and activation of proteins beyond the intended target, known as off-target effects, is a general concern in medicinal chemistry. Amongst commonly observed off-target effects, inhibition of the human *Ether-à-go-go* Related Gene (hERG) ion channel is one of the most immediately concerning, leading to QT prolongation and cardiotoxicity. For this reason, reducing hERG inhibition is often a high level goal in the development of novel drugs, making *in silico* models for hERG inhibition useful design tools.
+
+To aid in the development of publically available hERG inhibition models, an *in vitro* screen covering a small library of compounds for hERG inhibition was previously undertaken by the NCATS Chemical Genomics Center using an intercellular thallium flux-based activity assay. The results of this screen are reported in the PubChem database: "QHTS Assay For Small Molecule Inhibitors Of The Human HERG Channel Activity" (PubChem AID: 588834, Version: 2.1). 
+
+This analysis uses the NCATS CGC dataset to generate a model for hERG inhibition as a function of chemical structure, represented by a collection of molecular descriptors. We first model the probability of a compound exhibiting measurable hERG inhibition using a logistic regression. Then, we validate the model against a dataset from a second *in vitro* screen for hERG inhibition (Pharmacology School of Medicine, UNC Chapel Hill, "HERG Channel Activity", PubChem AID: 376, Version: 1.2). Finally, we present the validated model.
+
+## Composition of Dataset
+
+### Data Retrieval
+The modeling dataset was collected from the PubChem database on February 4, 2019 (NCATS CGC, "QHTS Assay For Small Molecule Inhibitors Of The Human HERG Channel Activity", PubChem AID: 588834, Version: 2.1). The dataset comprises approximately 5000 data points, each providing a chemical structure, a phenotype defining the compound as an inhibitor, activator, or inactive, and a potency defining the micromolar concentration at which the compound exhibited half maximum efficacy. Additionally, the dataset includes the raw concentration/inhibition data points used to generate these summary values and curve-fitting statistics.
+
+The validation dataset was collected from the PubChem database on March 4, 2019 (Pharmacology School of Medicine, UNC Chapel Hill, "HERG Channel Activity", PubChem AID: 376, Version: 1.2). The dataset comprises approximately 2000 data points, each providing a chemical structure and a percentage inhibition of hERG activity. Additionally, the dataset includes the raw voltage data and several summary fields.
+
+Molecular descriptors were calculated using KNIME-CDK version 1.5.600.v201711101057. RDKit KNIME Integration 3.4.0.v201807311105 was used for substructure searches and to simplify structures to the major component prior to calculation of molecular descriptors. The following descriptors were considered for incorporation into the hERG inhibition model:
+
+* Amine
+  + A binary flag indicating the presence of a primary or secondary amine.
+* Aromatic Atoms Count
+* Bond Polarizabilities
+  + The sum of the absolute value of the difference in atomic polarizabilities for each bonded atom pair in the molecule.
+* Eccentric Connectivity Index
+  + A scalar representation of the 3D topography of the molecule.
+* Formal Charge
+* Hydrogen Bond Acceptors (HBA)
+* Hydrogen Bond Donors (HBD)
+* Molecular Weight (MW)
+* Rotatable Bonds Count
+* sp3 Character
+  + The fraction of sp3 hybridized atoms in the molecule.
+* Topological Polar Surface Area (TPSA)
+  + The surface area occupied by polar atoms and attached hydrogen atoms in the molecule.
+* VABC Volume
+  + An estimation of the Van der Waals volume of the molecule.
+* XLogP
+  + An estimation of the octanol/water partition coefficient.
+
+The following modifications to the datasets were made prior to analysis.
+
+* Data points lacking either a chemical structure or activity data were removed.
+* Compounds for which the VABC Volume descriptor was incalculable were were removed.
+* Compounds which were flagged as activators of hERG channel flux were removed.
+* The Phenotype was re-encoded from "Inactive"/"Active" to 0/1.
+
+### Graphical Investigation
+We first investigated the modeling dataset graphically for a relation between hERG inhibition and the calculated molecular descriptors. A two-dimensional projection of the chemical space covered by the screening library was produced by principle components analysis of the continuous molecular descriptors. The plot revealed a general clustering of the active hERG inhibitors, indicating that the molecular descriptors were sucessfully describing some portion of the variance in the activity.
+
+```{r}
+# generate principle components from the major numeric descriptors
+# log transform predictors where necessary to get closer to normal
+hERG.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG, center = TRUE, scale. = TRUE)
+
+# plot the chemical space using the principle components, color by activity score
+chemspace <- ggplot(data = hERG) + geom_point(aes(x = hERG.PCA$x[,1], y = hERG.PCA$x[,2], color = as.factor(Phenotype)))
+
+# change titles, axis labels, tick marks
+chemspace <- chemspace + ggtitle("hERG Activity of Modeling Dataset") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank())
+
+# changes to the coloring and associated legend
+chemspace <- chemspace + guides(colour = guide_legend(title = "", reverse = TRUE)) + scale_color_manual(values = c("dark blue", "red"), labels = c("Inactive", "Active"))
+
+# show plot
+chemspace
+```
+
+In order to ensure that the UNC Chapel Hill dataset was appropriate for validation of the model, it was plotted on the same chemical space projection as the NCATS CGC dataset. We were pleased to find that the vast majority of the UNC Chapel Hill dataset lay within the chemical space covered by the NCATS CGC dataset.
+
+```{r, message = FALSE}
+# combine the modeling and validation datasets for plotting
+hERG.both <- full_join(mutate(hERG, Set = "Modeling"), mutate(hERG.validation, Set = "Validation"))
+
+# generate principle components from the major numeric descriptors
+# log transform predictors where necessary to get closer to normal
+hERG.both.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG.both, center = TRUE, scale. = TRUE)
+
+# plot the chemical space using the principle components, color by modeling/validation set
+chemspace.both <- ggplot(data = hERG.both) + geom_point(aes(x = hERG.both.PCA$x[,1], y = hERG.both.PCA$x[,2], color = Set))
+
+# change titles, axis labels, tick marks
+chemspace.both <- chemspace.both + ggtitle("Composition of Modeling vs. Validation Set") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank())
+
+# changes to the coloring and associated legend
+chemspace.both <- chemspace.both + guides(colour = guide_legend(title = "", reverse = TRUE)) + scale_color_manual(values = c("orange3", "turquoise4"), labels = c("NCATS CGC", "UNC Chapel Hill"))
+
+# show plot
+chemspace.both
+```
+
+## Model Selection
+
+We initially fit a logistic regression for hERG activity as a function of all available molecular descriptors, then removed highly collinear and minimally contributing molecular descriptors as guided by VIF and BIC. After this initial optimization, aromatic atom count, VABC volume, amine presence, TPSA, and XLogP remained as predictor variables. Plotting $Logit(Pr_{active})$ against each predictor variable revealed non-linearities in the relationships with VABC volume and TPSA, so quadratic terms terms were introduced for these predictors. Additionally, a cubic term was introduced for XLogP.
+
+With the contributing predictors identified, interaction terms were tested between amine presence and XLogP, amine presence and TPSA, and finally aromatic atom count and VABC volume. None of the tested interactions improved the model.
+
+Finally, the full and optimized models were compared with a 10-fold cross-validation. The optimized model provided an increase of 0.8% ROC AUC.
+
+```{r, warning = FALSE}
+# fit a logistic regression for Phenotype
+hERG.glm.final <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + I(VABC.Volume.Descriptor^2) + Amine + Topological.Polar.Surface.Area + I(Topological.Polar.Surface.Area^2) + XLogP + I(XLogP^3), data = hERG, family = binomial)
+
+# perform a ten-fold cross-validation to generate predicted values
+# ten-fold partition the hERG dataset
+logit.folds <- caret::createFolds(hERG$Phenotype, k = 10)
+
+# add new columns to hERG to hold the predictions
+hERG$Prediction.full <- NA
+hERG$Prediction.final <- NA
+
+for (i in 1:10) {
+  # fit the models on the 9/10 sets
+  glm.full <- glm(Phenotype ~ ., data = select(hERG, -Potency, -Prediction.full, -Prediction.final)[-logit.folds[[i]], ], family = binomial)
+  
+  glm.final <- glm(Phenotype ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + I(VABC.Volume.Descriptor^2) + Amine + Topological.Polar.Surface.Area + I(Topological.Polar.Surface.Area^2) + XLogP + I(XLogP^3), data = hERG[-logit.folds[[i]], ], family = binomial)
+
+  # predict with the 1/10 sets
+  pred.full <- predict(glm.full, select(hERG, -Potency)[logit.folds[[i]], ])
+  pred.final <- predict(glm.final, select(hERG, -Potency)[logit.folds[[i]], ])
+  
+  # store predicted values back in hERG
+  hERG[logit.folds[[i]], ] <- cbind(hERG[logit.folds[[i]], 1:15], pred.full, pred.final)
+}
+
+# output ROC curves
+# calculate the ROC objects
+ROC.full <- roc(response = hERG$Phenotype, pred = hERG$Prediction.full, threshold = 0.5)
+ROC.final <- roc(response = hERG$Phenotype, pred = hERG$Prediction.final, threshold = 0.5)
+
+# generate a plot
+ROC.plot <- ggroc(list(ROC.full, ROC.final), aes = "colour") + ggtitle("10-fold Cross-Validation ROC Curve")
+
+# set the legend parameters
+ROC.plot <- ROC.plot + scale_color_manual(values = c("red", "blue"), name = "", labels = c("full", "optimized"))
+
+# add a caption with the AUC
+ROC.plot <- ROC.plot + labs(caption = paste("Final Model AUC:", round(ROC.final$auc, digits = 2)))
+
+# display the plot
+ROC.plot
+```
+
+### Selected Model
+
+$logit(Pr_{active}) = \sum{X_i\beta_i}$
+
+Predictor ($X_i$) | Coefficient ($\beta_i$)
+----------- | ---------
+(intercept) | -4.49
+Aromatic Atoms | 0.107
+VABC Volume | 0.0156
+VABC Volume$^2$ | -1.09e-5
+Amine | 0.362
+TPSA | -0.0180
+TPSA$^2$ | 1.60e-5
+XLogP | 0.0781
+XLogP$^3$ | -1.11e-3
+
+### Model Validation
+
+The selected model was validated against the UNC Chapel Hill dataset. A cutoff of 50% hERG inhibition at the tested single-point concentration was selected for active molecules, given that all molecules in the NCATS CGC dataset with a measurable $IC_{50}$ were classified as active. The model correctly classified 74% of the tested molecules as hERG active or inactive.
+
+```{r}
+# predict inhibition for the validation set
+hERG.validation$Predicted <- predict(hERG.glm.final, hERG.validation)
+
+# plot a ROC curve
+# calculate the ROC object
+validation.ROC <- roc(response = hERG.validation$Phenotype, pred = hERG.validation$Predicted)
+
+# generate a plot
+ROC.plot <- ggroc(validation.ROC) + ggtitle("Validation Set ROC Curve")
+
+# add a caption with the AUC
+ROC.plot <- ROC.plot + labs(caption = paste("AUC:", round(validation.ROC$auc, digits = 2)))
+
+# display the plot
+ROC.plot
+```
+
+## Conclusion
+We have used a logistic regression approach to produce a model for classifying the hERG inhibition of compounds as either active or inactive. Testing the model against an independent validation gave predictions with moderate accuracy. While the overall performance of the model as measured by ROC AUC was only slightly improved from the baseline model fit with all available molecular descriptors, the relative simplicity of the optimized model makes it more suitable as a guide for the design of molecules.
+
+The optimized model revealed that the planarity induced by aromatic rings and the presence of a primary or secondary amine were direct drivers of hERG inhibition for molecules in the NCATS CGC dataset, in line with classical medicinal chemical heuristics. Additionally, VABC volume, TPSA, and XLogP proved to have a maxima at which the risk of hERG inhibition is highest, with the odds of inhibition falling off to either side. This behavior is in consistent with a binding interaction casuing blockage of the hERG channel.
+
+## Further Directions
+There are two immediate options to be explored with additional time:
+
+First, while we have assumed complete independence of observations in fitting the logistic regression, the compounds in the dataset are not completely novel structures. If we recognize that compounds with similar structures are more likely to exhibit similar properties, model performance could possibly be improved by clustering common structures in the dataset and fitting a mixed effects logistic regression, perhaps by spatially locating the compounds in a two-dimensional chemical space projection.
+
+Second, the NCATS CGC dataset used to generate the model classifies compounds with weak hERG activity as "inconclusive". While we elected to treat these compounds as hERG active in order to fit within the strict success/failure outcomes of logistic regression, a multinomial regression approach may improve model performance by harnessing this additional information.
+
+## Shiny Application
+For an interactive view of the presented model, please see the Shiny application at:
+
+https://gist.github.com/jsmith13/1b83f5361c91775a733951a3a837daf1
