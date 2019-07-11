@@ -1,0 +1,182 @@
+---
+title: "hERG Potency"
+author: "Jake Smith"
+date: "2/4/2019"
+output: html_document
+  latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(18438)
+
+require(ggplot2)
+require(dplyr)
+require(tidyr)
+require(mgcv)
+require(lme4)
+```
+
+Efforts to fit a linear model for the potency of hERG inhibition amongst the active compounds.
+
+```{r}
+# import the hERG dataset
+hERG <- read.csv("hERG_descriptors.csv")
+
+# remove Score and activators
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -row.ID)
+
+# convert potency to pIC50, replace NA with 0
+hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
+hERG <- mutate(hERG, Potency = case_when(is.na(Potency) ~ 0, !is.na(Potency) ~ Potency))
+
+# re-encode phenotype as success/fail
+hERG <- mutate(hERG, Phenotype = case_when(Phenotype == "Inactive" ~ 0, Phenotype == "Inhibitor" ~ 1))
+
+# subset active compounds
+hERG.actives <- hERG.actives <- filter(hERG, Phenotype == 1) %>% select(-Phenotype)
+```
+```{r}
+# plot histograms of each variable
+ggplot(data = gather(hERG.actives)) + geom_histogram(aes(value)) + facet_wrap(~ key, scales = "free_x")
+```
+```{r}
+# fit a linear model on all untransformed variables
+potency.lm <- lm(Potency ~ ., data = hERG.actives)
+
+# output a summary
+summary(potency.lm)
+
+# generate summary plots
+plot(potency.lm)
+```
+```{r}
+# remove non-significant variables, refit model
+potency.lm.v2 <- lm(Potency ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + Formal.Charge, data = hERG.actives)
+
+# output a summary
+summary(potency.lm.v2)
+```
+```{r}
+# remove formal charge, refit model
+potency.lm.v3 <- lm(Potency ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP, data = hERG.actives)
+
+# output a summary
+summary(potency.lm.v3)
+```
+
+```{r}
+# compare AIC of the three initial models
+AIC(potency.lm, potency.lm.v2, potency.lm.v3)
+```
+
+```{r}
+# generate a Box-Cox plot exploring transformations of Potency
+MASS::boxcox(Potency ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + Formal.Charge, data = hERG.actives, lambda = seq(-6, -2, 1/10))
+```
+
+```{r}
+# fit a model with Potency transformed
+potency.lm.v4 <- lm(Potency^(-4) ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + Formal.Charge, data = hERG.actives)
+
+# output summary plots
+plot(potency.lm.v4)
+```
+
+```{r}
+## cross-validation comparison for a few of the above models
+
+# set seed for reproducible cv-group splitting
+set.seed(23515)
+
+# ten-fold partition the hERG.actives dataset
+logit.folds <- caret::createFolds(hERG.actives$Potency, k = 10)
+
+# declare a matrix to hold rms errors
+rmse <- matrix(nrow = 10, ncol = 4)
+
+# add new columns to hERG.actives to hold predictions
+hERG.actives$Prediction1 <- NA
+hERG.actives$Prediction2 <- NA
+hERG.actives$Prediction3 <- NA
+hERG.actives$Prediction4 <- NA
+
+# define a restricted dataset to run regressions on
+hERG.restict <- select(hERG.actives, -Prediction1, -Prediction2, -Prediction3, -Prediction4)
+
+# perform ten-fold cross-validation on the three logistic regressions
+for (i in 1:10) {
+  # fit the models on the 9/10 sets
+  lm1 <- lm(Potency ~ ., data = hERG.restict[-logit.folds[[i]], ])
+
+  lm2 <- lm(Potency ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + Formal.Charge, data = hERG.restict[-logit.folds[[i]], ])
+  
+  lm3 <- lm(Potency^(-4) ~ Aromatic.Atoms.Count + VABC.Volume.Descriptor + Hydrogen.Bond.Acceptors + Topological.Polar.Surface.Area + XLogP + Formal.Charge, data = hERG.restict[-logit.folds[[i]], ])
+  
+  lm4 <- lm(Potency ~ XLogP, data = hERG.restict[-logit.folds[[i]], ])
+  
+  # predict with the 1/10 sets
+  lm1.pred <- predict(lm1, select(hERG, -Potency)[logit.folds[[i]], ])
+  lm2.pred <- predict(lm2, select(hERG, -Potency)[logit.folds[[i]], ])
+  lm3.pred <- predict(lm3, select(hERG, -Potency)[logit.folds[[i]], ])
+  lm4.pred <- predict(lm4, select(hERG, -Potency)[logit.folds[[i]], ])
+  
+  # store predicted values back in hERG.actives
+  hERG.actives[logit.folds[[i]], ] <- cbind(hERG.actives[logit.folds[[i]], 1:14], lm1.pred, lm2.pred, lm3.pred, lm4.pred)
+  
+  # calculate rms errors
+  rmse[, 1] <- (lm1.pred - hERG.actives$Potency[logit.folds[[i]]])^2 %>% mean() %>% sqrt()
+  rmse[, 2] <- (lm2.pred - hERG.actives$Potency[logit.folds[[i]]])^2 %>% mean() %>% sqrt()
+  rmse[, 3] <- (lm3.pred^(-1/4) - hERG.actives$Potency[logit.folds[[i]]])^2 %>% mean() %>% sqrt()
+  rmse[, 4] <- (lm4.pred - hERG.actives$Potency[logit.folds[[i]]])^2 %>% mean() %>% sqrt()
+}
+
+# calculate mean rmse for the models
+apply(rmse, 2, mean)
+```
+
+```{r}
+## plot a chemical space projection colored by observed pIC50
+
+# generate principle components from the major numeric descriptors
+# log transform predictors where necessary to get closer to normal
+hERG.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG, center = TRUE, scale. = TRUE)
+
+# bind the first and second principle components into the dataset
+hERGv2 <- cbind(hERG, "PCA1" = hERG.PCA$x[,1], "PCA2" = hERG.PCA$x[,2])
+
+# plot the chemical space using the principle components, color by activity score
+chemspace <- ggplot(data = filter(hERGv2, Phenotype == 1)) + geom_point(aes(x = PCA1, y = PCA2, color = hERG.actives$Potency))
+
+# change titles, axis labels, tick marks
+chemspace <- chemspace + ggtitle("Chemical Space") + xlab("") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank(), plot.title = element_text(hjust = 0.5))
+
+# changes to the coloring and associated legend
+chemspace <- chemspace + scale_color_continuous("pIC50", low = "dark blue", high = "red")
+
+# show plot
+chemspace
+```
+```{r}
+## plot a chemical space projection colored by pIC50 predicted by the third model (lm3 in cv loop)
+
+# generate principle components from the major numeric descriptors
+# log transform predictors where necessary to get closer to normal
+hERG.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG, center = TRUE, scale. = TRUE)
+
+# bind the first and second principle components into the dataset
+hERGv2 <- cbind(hERG, "PCA1" = hERG.PCA$x[,1], "PCA2" = hERG.PCA$x[,2])
+
+# plot the chemical space using the principle components, color by activity score
+chemspace <- ggplot(data = filter(hERGv2, Phenotype == 1)) + geom_point(aes(x = PCA1, y = PCA2, color = hERG.actives$Prediction3 ^ (-1/4)))
+
+# change titles, axis labels, tick marks
+chemspace <- chemspace + ggtitle("Chemical Space") + xlab("") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank(), plot.title = element_text(hjust = 0.5))
+
+# changes to the coloring and associated legend
+chemspace <- chemspace + scale_color_continuous("Predicted\npIC50", low = "dark blue", high = "red")
+
+# show plot
+chemspace
+```
+
