@@ -257,7 +257,7 @@ There are two immediate options to be explored with additional time:
 
 First, while we have assumed complete independence of observations in fitting the logistic regression, the compounds in the dataset are not completely novel structures. If we recognize that compounds with similar structures are more likely to exhibit similar properties, model performance could possibly be improved by clustering common structures in the dataset and fitting a mixed effects logistic regression, perhaps by spatially locating the compounds in a two-dimensional chemical space projection.
 
-Second, the NCATS CGC dataset used to generate the model classifies compounds with weak hERG activity as "inconclusive". While we elected to treat these compounds as hERG active in order to fit within the strict success/failure outcomes of logistic regression, a multinomial regression approach may improve model performance by harnessing this additional information.
+Second, beyond the phenotype classification used in this analysis the NCATS CGC dataset used to generate the model contains hERG IC50 values. This presents the opportunity to fit a predictive model using the subset of active compounds.
 
 ## Shiny Application
 For an interactive view of the presented model, please see the Shiny application at:
