@@ -1,16 +1,12 @@
-### Shiny application for visual exploration of model fitting.
-
-## setup dataset to be used in app
-# set random seed for reproducability
-set.seed(18438)
-
-# import required libraries
+## required libraries
 require(ggplot2)
 require(dplyr)
-require(tidyr)
-require(robustbase)
 require(pROC)
+require(shiny)
+require(kableExtra)
 
+
+## setup dataset to be used in app
 # import a 500 row sample from the hERG dataset
 hERG <- read.csv("https://gist.githubusercontent.com/jsmith13/dd405d28a3dfa9e2a7ef276cc6135cbc/raw/23f20c56c44bd9cd7f212a745df8295ca177f6a3/hERG.csv")
 
@@ -18,100 +14,21 @@ hERG <- read.csv("https://gist.githubusercontent.com/jsmith13/dd405d28a3dfa9e2a7
 # log transform predictors where necessary to get closer to normal
 hERG.PCA <- prcomp(formula = ~ log(Bond.Polarizabilities) + log(VABC.Volume.Descriptor) + log(Topological.Polar.Surface.Area + 1) + log(Molecular.Weight) + XLogP + log(Eccentric.Connectivity.Index), data = hERG, center = TRUE, scale. = TRUE)
 
+# set random seed for reproducability
+set.seed(18438)
+
 # ten-fold partition the hERG dataset
 logit.folds <- caret::createFolds(hERG$Phenotype, k = 10)
 
-
-
-## Shiny user interface elements
-UI <- shinyUI(fluidPage(
-  
-  # a title for the page
-  titlePanel("A Logistic Regression Model for hERG Inhibition"),
-  
-  # lay out the page with a minor and major panel
-  sidebarLayout(
-    
-    # a minor panel for selecting modeling options
-    sidebarPanel(
-      
-      h3("Model Parameters"),
-      
-      # check boxes for the available predictors
-      checkboxGroupInput("selected.predictors",
-        h4("Predictors to Include"),
-        choices = list("Aromatic Atoms" = "Aromatic.Atoms.Count",
-                       "Bond Polarizabilities" = "Bond.Polarizabilities",
-                       "VABC Volume" = "VABC.Volume.Descriptor",
-                       "Hydrogen Bond Acceptors" = "Hydrogen.Bond.Acceptors",
-                       "Hydrogen Bond Donors" = "Hydrogen.Bond.Donors",
-                       "Rotatable Bonds" = "Rotatable.Bonds.Count",
-                       "TPSA" = "Topological.Polar.Surface.Area",
-                       "Molecular Weight" = "Molecular.Weight",
-                       "XLogP" = "XLogP",
-                       "Formal Charge" = "Formal.Charge",
-                       "sp3 Character" = "SP3.Character",
-                       "Eccentric Connectivity Index" = "Eccentric.Connectivity.Index",
-                       "Amine Present" = "Amine"),
-        selected = c("Aromatic.Atoms.Count", "VABC.Volume.Descriptor", "Amine", "Topological.Polar.Surface.Area", "XLogP")
-        ),
-      
-      # check boxes for quadratic terms
-      checkboxGroupInput("higher.order.predictors",
-        h4("Higher Order Terms"),                 
-        choices = list("VABC Volume" = "I(VABC.Volume.Descriptor^2)",
-                       "TPSA" = "I(Topological.Polar.Surface.Area^2)",
-                       "XLogP" = "I(XLogP^3)"),
-        selected = c("I(VABC.Volume.Descriptor^2)", "I(Topological.Polar.Surface.Area^2)", "I(XLogP^3)")
-      ),
-      
-      h3("Plotting Options"),
-      
-      # radio buttons to change plotted color scheme from binary active/inactive to odds active
-      radioButtons("plot.color.scheme", h4("Prediction Plot"), choices = c("Binary Active/Inactive" = "binary", "Odds Active" = "continuous", "Correct/Incorrect" = "correct")),
-      
-      # a slider to select the odds cutoff for classifying active/inactive predictions
-      sliderInput("threshold", h4("Active/Inactive Cutoff"), min = 0.1, max = 0.9, value = 0.5, step = 0.05),
-      
-      width = 2
-    ),
-    
-    # the major panel for displaying plots and summaries
-    mainPanel(
-      fluidRow(
-        column(12,
-               # display the prediction plot
-               plotOutput("prediction.plot", height = "600px")
-        )
-      ),
-      
-      fluidRow(
-        column(8,
-          # display the modeling dataset plot
-          plotOutput("modeling.dataset.plot")
-        ),
-        
-        column(4,
-          # display the ROC plot
-          plotOutput("roc.plot")     
-        )
-      )
-      
-    )
-  )
-))
-
-
-
-## Shiny server
-server <- shinyServer(function(input, output) {
+## define Shiny server
+function(input, output) {
   
   # define the modeling dataset plot
   # plot the chemical space using the principle components, color by activity score
   # set axis labels and legend parameters
   output$modeling.dataset.plot <- renderPlot(ggplot(data = hERG) + geom_point(aes(x = hERG.PCA$x[,1], y = hERG.PCA$x[,2], color = as.factor(Phenotype))) +
-    ggtitle("Modeling Dataset") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank()) + 
-    guides(colour = guide_legend(title = "", reverse = TRUE)) + scale_color_manual(values = c("dark blue", "red"), labels = c("Inactive", "Active")))
+                                               ggtitle("Observed Classes") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank()) + 
+                                               guides(colour = guide_legend(title = "", reverse = TRUE)) + scale_color_manual(values = c("dark blue", "red"), labels = c("Inactive", "Active")))
   
   # define a reactive expression that reads the selected.predictors check box group and outputs a function
   selected.formula <- eventReactive(c(input$selected.predictors, input$higher.order.predictors), {
@@ -175,9 +92,9 @@ server <- shinyServer(function(input, output) {
     # plot the chemical space using the principle components, color by predicted odds active
     # set axis labels 
     prediction.plot <- ggplot(data = hERG) + geom_point(aes(x = hERG.PCA$x[,1], y = hERG.PCA$x[,2], color = binary.continuous.switch())) +
-    ggtitle("Predicted Values") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank()) + 
-    guides(colour = guide_legend(title = "", reverse = TRUE))
-        
+      ggtitle("Predicted Classes") + xlab("Chemical Space Projection") + ylab("") + theme(axis.ticks = element_blank(), axis.text = element_blank()) + 
+      guides(colour = guide_legend(title = "", reverse = TRUE))
+    
     # set the legend and color scheme for the continuous and binary output options
     if (input$plot.color.scheme == "binary") {
       prediction.plot + scale_color_manual(values = c("dark blue", "red"), labels = c("Inactive", "Active"))
@@ -190,18 +107,68 @@ server <- shinyServer(function(input, output) {
     }
   })
   
-  # define the ROC plot
-  output$roc.plot <- renderPlot({
-    # calculate the ROC object
-    roc.calculation <- roc(response = hERG$Phenotype, pred = predictions())
-
-    # generate a plot; add a title and caption with the AUC
-    ggroc(roc.calculation) + ggtitle("10-fold Cross-Validation ROC Curve") + labs(caption = paste("AUC:", round(roc.calculation$auc, digits = 2)))
+  # define the confusion matrix
+  output$confusion.matrix <- renderPrint({
+    # convert predicted log(Pr) into probability active and cut at user-defined threshold
+    predicted.classes <- boot::inv.logit(predictions()) %>% cut(breaks = c(-0.01, input$threshold, 1)) %>% as.numeric()
+    
+    # generate a confusion matrix
+    cm <- table(observed = hERG$Phenotype, predicted = predicted.classes - 1)
+    
+    # give row and column names to the matrix
+    cm <- as.matrix(cm)
+    rownames(cm) <- c("Inactive", "Active")
+    colnames(cm) <- c("Inactive", "Active")
+    
+    # format the table for display
+    knitr::kable(cm, caption = "Confusion Matrix") %>% kable_styling(c("bordered", "hover"), full_width = FALSE)
   })
   
-})
-
-
-
-# run the Shiny app
-shinyApp(ui = UI, server = server)
+  # define the sensitivity and specificity table
+  output$sensitivity_specificity <- renderPrint({
+    # convert predicted log(Pr) into probability active and cut at user-defined threshold
+    predicted.classes <- boot::inv.logit(predictions()) %>% cut(breaks = c(-0.01, input$threshold, 1)) %>% as.numeric()
+    
+    # generate a confusion matrix
+    cm <- table(observed = hERG$Phenotype, predicted = predicted.classes - 1)
+    
+    # calculate the sensitivity, specificity, and positive predictive value
+    sensitivity <- round(cm[4] / (cm[2] + cm[4]), 2)
+    specificity <- round(cm[1] / (cm[1] + cm[3]), 2)
+    ppv <- round(cm[4] / (cm[3] + cm[4]), 2)
+    
+    #calculate the ROC AUC
+    roc.calculation <- roc(response = hERG$Phenotype, pred = predictions())
+    auc <- round(roc.calculation$auc, 2)
+    
+    # put into a table to print
+    c("Sensitivity: ", "Specificity: ", "PPV: ", "AUC:", sensitivity, specificity, ppv, auc) %>%
+      matrix(ncol = 2) %>% kable(caption = "Performance") %>% kable_styling(c("bordered", "hover"))
+  })
+  
+  # define the ROC plot
+  output$roc.plot <- renderPlot({
+    ## for plotting the ROC curve
+    # calculate the ROC object
+    roc.calculation <- roc(response = hERG$Phenotype, pred = predictions())
+    
+    # generate a plot; add a title and caption with the AUC
+    to_plot <- ggroc(roc.calculation, size = 1.5) + ggtitle("10-fold Cross-Validation ROC Curve") + theme_bw()
+    
+    ## for highlighting the effect of the current threshold
+    # convert predicted log(Pr) into probability active and cut at user-defined threshold
+    predicted.classes <- boot::inv.logit(predictions()) %>% cut(breaks = c(-0.01, input$threshold, 1)) %>% as.numeric()
+    
+    # generate a confusion matrix
+    cm <- table(observed = hERG$Phenotype, predicted = predicted.classes - 1)
+    
+    # calculate the sensitivity and specificity
+    sens <- cm[4] / (cm[2] + cm[4])
+    spec <- cm[1] / (cm[1] + cm[3])
+    
+    # add a vertical line at the current specificity to the ROC curve
+    to_plot + geom_segment(aes(x = spec, y = sens, xend = spec, yend = 0), size = 1, color = "blue") +
+      geom_segment(aes(x = spec, y = sens, xend = 1, yend = sens), size = 1, color = "blue")
+  })
+  
+}
