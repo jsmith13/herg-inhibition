@@ -11,7 +11,7 @@ http://bicologie.com/jakeallensmith/projects/herg-inhibition/
 - Molecular descriptors calculated using RDKit and KNIME.
 
 ## Contents 
-- App.R  
+- app.R  
 An R Shiny application producing an interactive visualization of the model fitting process.
 
 - hERG_descriptors.csv  
