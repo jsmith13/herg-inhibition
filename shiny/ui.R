@@ -7,7 +7,7 @@ require(kableExtra)
 
 
 ## define Shiny UI
-fluidPage(
+fixedPage(
   
   # a title for the page
   titlePanel("hERG Inhibition: Model Exploration"),
@@ -56,35 +56,38 @@ fluidPage(
       # a slider to select the odds cutoff for classifying active/inactive predictions
       sliderInput("threshold", h4("Active/Inactive Cutoff"), min = 0.1, max = 0.9, value = 0.5, step = 0.05),
       
-      width = 2
+      width = 3
     ),
     
     # the major panel for displaying plots and summaries
     mainPanel(
-      fluidRow(
-        column(6,
+      fixedRow(
+        column(8,
                # display the prediction plot
-               plotOutput("prediction.plot", height = "450px")
+               plotOutput("prediction.plot", width = "500px", height = "450px")
         ),
         column(4,
                # display the ROC plot
-               plotOutput("roc.plot", height = "450px")
+               plotOutput("roc.plot", width = "450px", height = "450px")
         )
       ),
       
-      fluidRow(
-        column(6,
+      fixedRow(
+        column(8,
                # display the modeling dataset plot
-               plotOutput("modeling.dataset.plot", height = "450px")
+               plotOutput("modeling.dataset.plot", width = "500px", height = "450px")
         ),
         
-        column(2,
-               # display the confusion matrix
-               tableOutput("confusion.matrix")
-        ),
-        column(2,
-               # explicitly print the sensitivity and specificity
-               tableOutput("sensitivity_specificity")
+        column(3,
+          fixedRow(
+                 # display the confusion matrix
+                 tableOutput("confusion.matrix")
+          ),
+          fixedRow(
+                 # explicitly print the sensitivity and specificity
+                 tableOutput("sensitivity_specificity")
+          ),
+          offset = 1
         )
       )
     )

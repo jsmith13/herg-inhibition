@@ -142,7 +142,7 @@ function(input, output) {
     auc <- round(roc.calculation$auc, 2)
     
     # put into a table to print
-    c("Sensitivity: ", "Specificity: ", "PPV: ", "AUC:", sensitivity, specificity, ppv, auc) %>%
+    c("Sensitivity", "Specificity", "PPV", "AUC", sensitivity, specificity, ppv, auc) %>%
       matrix(ncol = 2) %>% kable(caption = "Performance") %>% kable_styling(c("bordered", "hover"))
   })
   
