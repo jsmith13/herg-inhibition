@@ -7,10 +7,10 @@ require(kableExtra)
 
 
 ## define Shiny UI
-fixedPage(
+fluidPage(
   
   # a title for the page
-  titlePanel("hERG Inhibition: Model Exploration"),
+  #titlePanel("hERG Inhibition: Model Exploration"),
   
   # lay out the page with a minor and major panel
   sidebarLayout(
@@ -56,38 +56,37 @@ fixedPage(
       # a slider to select the odds cutoff for classifying active/inactive predictions
       sliderInput("threshold", h4("Active/Inactive Cutoff"), min = 0.1, max = 0.9, value = 0.5, step = 0.05),
       
-      width = 3
+      width = 2
     ),
     
     # the major panel for displaying plots and summaries
     mainPanel(
-      fixedRow(
-        column(8,
+      fluidRow(
+        column(7,
                # display the prediction plot
-               plotOutput("prediction.plot", width = "500px", height = "450px")
+               plotOutput("prediction.plot", height = "auto")
         ),
-        column(4,
+        column(5,
                # display the ROC plot
-               plotOutput("roc.plot", width = "450px", height = "450px")
+               plotOutput("roc.plot", height = "auto")
         )
       ),
       
-      fixedRow(
-        column(8,
-               # display the modeling dataset plot
-               plotOutput("modeling.dataset.plot", width = "500px", height = "450px")
+      fluidRow(
+        column(7,
+               # display the observed plot
+               plotOutput("observed.plot", height = "auto")
         ),
         
-        column(3,
-          fixedRow(
-                 # display the confusion matrix
-                 tableOutput("confusion.matrix")
+        column(5,
+          fluidRow(
+               # display the confusion matrix
+               tableOutput("confusion.matrix")
           ),
-          fixedRow(
-                 # explicitly print the sensitivity and specificity
-                 tableOutput("sensitivity_specificity")
-          ),
-          offset = 1
+          fluidRow(
+               # print the sensitivity, specificity, and others
+               tableOutput("sensitivity_specificity")
+          )
         )
       )
     )
