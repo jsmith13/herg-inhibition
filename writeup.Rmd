@@ -20,7 +20,7 @@ require(pROC)
 hERG <- read.csv("hERG_descriptors.csv")
 
 # remove Score and activators
-hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -row.ID)
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -Outcome, -SubstanceID, -SMILES)
 
 # convert potency to pIC50, replace NA with 0
 hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
@@ -34,7 +34,7 @@ hERG <- mutate(hERG, Phenotype = case_when(Phenotype == "Inactive" ~ 0, Phenotyp
 hERG.validation <- read.csv("hERG_validation_descriptors.csv")
 
 # remove activators and extraneous columns
-hERG.validation <- filter(hERG.validation, Percent > -20) %>% select(-Score, -row.ID)
+hERG.validation <- filter(hERG.validation, Percent > -20) %>% select(-Score, -SubstanceID, -SMILES)
 
 # encode percentage inhibition as success/fail, name Phenotype for consistency with modeling dataset
 hERG.validation <- mutate(hERG.validation, Phenotype = case_when(Percent < 50 ~ 0, Percent >= 50 ~ 1))

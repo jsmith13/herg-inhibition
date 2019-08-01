@@ -20,7 +20,7 @@ require(pROC)
 hERG <- read.csv("hERG_descriptors.csv")
 
 # remove Score and activators
-hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -row.ID)
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -SubstanceID, - SMILES)
 
 # convert potency to pIC50, replace NA with 0
 hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
