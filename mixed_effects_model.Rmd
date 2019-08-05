@@ -1,0 +1,176 @@
+---
+title: "hERG Inhibition GLMER"
+author: "Jake Smith"
+---
+
+```{r setup, include=FALSE}
+# import required libraries
+require(reticulate)
+require(dplyr)
+require(ggplot2)
+require(MCMCglmm)
+
+# change to rd-kit conda environment
+use_condaenv("rdkit", required = TRUE)
+
+# make compound clustering functions callable in R environment
+source_python("clustering.py")
+
+# set random seeds
+set.seed(23594)
+py_set_seed(99934)
+```
+
+```{r}
+## declare a function cross_validation
+# training_set: a dataframe containing the data to be fit
+# cv_split: a set of data partitions as create by caret::createFolds
+# model_function: a function to call 
+# formula: a formula object to pass to model_function
+# ...: additional parameters to pass to model_function
+cross_validation <- function(training_set, cv_split, model_function, formula, ...) {
+  # declare an empty vector to hold the predictions
+  cv_predictions <- rep(NaN, length(cv_split))
+  
+  # cross_validation on each group in cv_split
+  for (i in 1:length(cv_split)) {
+    # fit model_function on the majority of the dataset
+    intermediate.model <- model_function(formula, data = training_set[-cv_split[[i]], ], ...)
+    
+    # predict values for the hold out set using this model
+    cv_predictions[cv_split[[i]]] <- predict(intermediate.model , training_set[cv_split[[i]], ])
+  }
+  
+  # return the predictions
+  return(cv_predictions)
+} 
+```
+
+```{r}
+## load dataset, modify as in model_selection.Rmd
+# load the training dataset
+hERG <- read.csv(file = "hERG_descriptors.csv")
+
+# remove activators and some unnecessary columns
+hERG <-  filter(hERG, !Phenotype == "Activator") %>% select(-Score, -SubstanceID, -Outcome)
+
+# convert potency to pIC50, replace NA with 0
+hERG <- mutate(hERG, Potency = -1 * log(Potency * 1e-6, base = 10))
+hERG <- mutate(hERG, Potency = case_when(is.na(Potency) ~ 0, !is.na(Potency) ~ Potency))
+
+# re-encode phenotype as success/fail
+hERG <- mutate(hERG, Phenotype = case_when(Phenotype == "Inactive" ~ 0, Phenotype == "Inhibitor" ~ 1))
+```
+
+```{r}
+## we will trade off some interpretability and normalize the molecular descriptors used in the random effects
+# subset down to the variables selected in the initial model
+hERG.subset <- select(hERG, Phenotype, SMILES, Amine, Aromatic.Atoms.Count, VABC.Volume.Descriptor, Topological.Polar.Surface.Area, XLogP)
+
+# log transform TPSA and VABC volume (+1)
+hERG.subset <- hERG.subset %>% mutate(Topological.Polar.Surface.Area = log(Topological.Polar.Surface.Area + 1), 
+                VABC.Volume.Descriptor = log(VABC.Volume.Descriptor))
+
+# scale log(TPSA), log(VABC + 1), and XLogP to N(0, 1)
+hERG.subset <- hERG.subset %>% mutate(Topological.Polar.Surface.Area = scale(Topological.Polar.Surface.Area), 
+                VABC.Volume.Descriptor = scale(VABC.Volume.Descriptor), XLogP = scale(XLogP))
+```
+
+The frequentist mixed-effects model fit with lme4 produces a singular fit. We will instead fit a Bayesian model with MCMCglmm. 
+
+```{r}
+## fit a test model on the entire dataset
+# calculate a sample set of clusters using a relatively arbitrary distance threshold
+hERG.subset$cluster <- cluster_compounds(hERG.subset$SMILES, 0.75)
+
+# designating non-informative priors for the residual and random effects distributions as defined in:
+# https://github.com/tmalsburg/MCMCglmm-intro
+priors <- list(
+  R = list(V = 1, n = 1, fix = 1),
+  G = list(G1 = list(
+    V = diag(6), 
+    n = 6,
+    alpha.mu = rep(0, 6),
+    alpha.V = diag(6) * 25^2)
+  )
+)
+
+# fit a test glmer
+# amine and aromatic atoms count fit on the population level
+# VABC volume, TPSA, and XLogP fit on the group level
+# excluding interactions on the group level to preserve some interpretability
+test.glmm <- MCMCglmm(
+  fixed = Phenotype ~ Amine + Aromatic.Atoms.Count, 
+  random = ~ idh(VABC.Volume.Descriptor + I(VABC.Volume.Descriptor^2) +
+                  Topological.Polar.Surface.Area + I(Topological.Polar.Surface.Area^2) +
+                  XLogP + I(XLogP^3)) : cluster, 
+  data = hERG.subset, family = "categorical", prior = priors, 
+  nitt = 2e5, thin = 100, burnin = 1e4, verbose = FALSE)
+```
+
+The initial test model indicates that the higher order terms are now detrimental here. It may be that the non-linearities were caused by intergroup correlations that are now more properly accounted for. We will tune the clustering distance threshold without them, then test again.
+
+```{r}
+## clustering distance tuning
+# select a range of distance thresholds to test
+distance_thresholds <- c(0:20 * 0.05)
+
+# designating non-informative priors for the residual and random effects distributions as defined in:
+# https://github.com/tmalsburg/MCMCglmm-intro
+priors <- list(
+  R = list(V = 1, n = 1, fix = 1),
+  G = list(G1 = list(
+    V = diag(3), 
+    n = 3,
+    alpha.mu = rep(0, 3),
+    alpha.V = diag(3) * 25^2)
+  )
+)
+
+# ten-fold partition the hERG dataset
+set.seed(235923)
+cv_groups <- caret::createFolds(hERG.subset$Phenotype, k = 10)
+
+# declare an empty matrix to hold the cross-validation predictions
+cv_predictions <- matrix(nrow = dim(hERG.subset)[1], ncol = length(distance_thresholds))
+
+# perform cross-validation
+for (i in 1:length(distance_thresholds)) {
+  # cluster the compounds using the current threshold
+  hERG.subset$cluster <- cluster_compounds(hERG.subset$SMILES, distance_thresholds[i])
+  
+  # generate cross-validation predictions for the current threshold
+  cv_predictions[, i] <- cross_validation(hERG.subset, cv_groups, MCMCglmm, 
+              formula = Phenotype ~ Amine + Aromatic.Atoms.Count, 
+              random = ~ idh(VABC.Volume.Descriptor + Topological.Polar.Surface.Area + XLogP) : cluster,
+              family = "categorical", prior = priors, 
+              nitt = 10000, thin = 50, burnin = 3000, verbose = FALSE)
+}                   
+
+# compare the predictions to the known classes
+predictions_auc <- apply(cv_predictions, 2, function(x) {
+  pROC::auc(response = hERG.subset$Phenotype, predictor = x, threshold = 0.5)})
+
+# plot AUC versus threshold distance
+ggplot() + geom_point(aes(distance_thresholds, predictions_auc))
+```
+
+Evaluating the relative parsimony of the models here is not entirely straightforward, as the number of clusters has a complex relationship with the threshold distance. We will calculate the number of clusters for each threshold distance, then select the threhold with the least clusters within one standard error of the maximum AUC.
+
+```{r}
+## 
+# find the number of clusters produced at each threshold distance
+number_of_clusters <- tune_clustering_threshold(hERG.subset$SMILES, distance_thresholds)[1][[1]]
+
+# thresholds within one standard error of the max AUC
+predictions_auc_1se <- which(predictions_auc >= (max(predictions_auc) - sd(predictions_auc) / length(predictions_auc)))
+
+# amongst those, threshold with the least clusters
+predictions_auc_top <- which(number_of_clusters[predictions_auc_1se] == min(number_of_clusters[predictions_auc_1se]))
+
+# optimized threshold distance
+opt_dist <- distance_thresholds[predictions_auc_top]
+```
+
+
+
