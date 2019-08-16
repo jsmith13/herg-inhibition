@@ -8,7 +8,7 @@ http://jakeallensmith.com/projects/herg-inhibition/
 
 ## Dataset
 - hERG assay data collected from the PubChem bioassay repository (https://pubchem.ncbi.nlm.nih.gov/bioassay/588834).
-- Molecular descriptors calculated using RDKit and KNIME.
+- Molecular descriptors calculated using RDKit and KNIME-CDK.
 
 ## Contents 
 - app.R  
