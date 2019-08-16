@@ -1,6 +1,6 @@
 # hERG Inhibition
 An inferential model for small molecule inhibition of the human Ether-à-go-go channel.
-http://bicologie.com/jakeallensmith/projects/herg-inhibition/
+http://jakeallensmith.com/projects/herg-inhibition/
 
 ## Objectives
 - Build an inferential model to identify molecular properties contributing to inhibition of the human Ether-à-go-go (hERG) ion channel.
